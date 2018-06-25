@@ -1,8 +1,11 @@
-import { JinagaServer } from 'jinaga';
+import { dehydrateFact } from './hydrate';
 import { Collection, Db, MongoClient } from 'mongodb';
 import { PoolClient } from 'pg';
 
+import { clearLine, cursorTo } from "readline";
+
 import { ConnectionFactory } from './connection';
+import { PostgresStore } from './postgres-store';
 
 const args = process.argv.slice(2);
 
@@ -14,10 +17,6 @@ if (args.length !== 2) {
 const mongoDbConnection = args[0];
 const postgreSQLConnection = args[1];
 
-const { j } = JinagaServer.create({
-    pgKeystore: postgreSQLConnection,
-    pgStore: postgreSQLConnection
-});
 MongoClient.connect(mongoDbConnection, (error, db) => {
     if (error) {
         console.log('Error connecting to MongoDB: ' + error.message);
@@ -40,8 +39,9 @@ async function migrate(db: Db): Promise<void> {
     const users = db.collection('users');
     const successors = db.collection('successors');
     const connectionFactory = new ConnectionFactory(postgreSQLConnection);
+    const postgresStore = new PostgresStore(postgreSQLConnection);
     await migrateUsers(users, connectionFactory);
-    await migrateFacts(successors, connectionFactory);
+    await migrateFacts(successors, postgresStore);
 }
 
 async function migrateUsers(users: Collection<any>, connectionFactory: ConnectionFactory): Promise<void> {
@@ -49,22 +49,39 @@ async function migrateUsers(users: Collection<any>, connectionFactory: Connectio
         const query = {
             provider: 'https://sts.windows.net/f2267c2e-5a54-49f4-84fa-e4f2f4038a2e/'
         };
+        let count = 0;
+        beginProgress('Migrating users');
+
         await find(users, query, async user => {
-            console.log('Found user ' + user.userId);
             await saveUser(connection, user);
+
+            count++;
+            progress('Migrated users', count);
         });
+
+        endProgress();
     });
 }
 
-async function migrateFacts(successors: Collection<any>, connectionFactory: ConnectionFactory): Promise<void> {
+async function migrateFacts(successors: Collection<any>, postgresStore: PostgresStore): Promise<void> {
     const query = {
         fact: {
             '$exists': true
         }
     };
+    let count = 0;
+    beginProgress('Migrating facts');
+
     await find(successors, query, async successor => {
-        //console.log('Found fact ' + JSON.stringify(successor.fact));
+        const fact = JSON.parse(JSON.stringify(successor.fact));
+        const factRecords = dehydrateFact(fact);
+        await postgresStore.save(factRecords);
+
+        count++;
+        progress('Migrated facts', count);
     });
+
+    endProgress();
 }
 
 async function find(collection: Collection<any>, query: {}, handler: ((result: any) => Promise<void>)): Promise<void> {
@@ -78,4 +95,18 @@ async function find(collection: Collection<any>, query: {}, handler: ((result: a
 async function saveUser(connection: PoolClient, user: any) {
     await connection.query('INSERT INTO public.user (provider, user_id, private_key, public_key) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING',
         [user.provider, user.userId, user.privateKey, user.publicKey]);
+}
+
+function beginProgress(message: string) {
+    process.stdout.write(`${message}\n`);
+}
+
+function progress(message: string, count: number) {
+    clearLine(process.stdout, 0);
+    cursorTo(process.stdout, 0);
+    process.stdout.write(`${message}: ${count}`);
+}
+
+function endProgress() {
+    process.stdout.write('\n');
 }
