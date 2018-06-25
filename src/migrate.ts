@@ -24,7 +24,10 @@ MongoClient.connect(mongoDbConnection, (error, db) => {
     console.log('Connected to MongoDB.');
 
     const users = db.collection('users');
+    const successors = db.collection('successors');
     migrateUsers(users).then(() => {
+        return migrateFacts(successors);
+    }).then(() => {
         db.close();
         console.log('Disconnected from MongoDB.');
     }).catch(err => {
@@ -38,9 +41,20 @@ async function migrateUsers(users: Collection<any>): Promise<void> {
     const query = {
         provider: 'https://sts.windows.net/f2267c2e-5a54-49f4-84fa-e4f2f4038a2e/'
     };
-    await(find(users, query, user => {
+    await find(users, query, user => {
         console.log('Found user ' + user.userId);
-    }));
+    });
+}
+
+async function migrateFacts(successors: Collection<any>): Promise<void> {
+    const query = {
+        fact: {
+            '$exists': true
+        }
+    };
+    await find(successors, query, successor => {
+        console.log('Found fact ' + JSON.stringify(successor.fact));
+    });
 }
 
 function find(collection: Collection<any>, query: {}, handler: ((result: any) => void)): Promise<void> {
