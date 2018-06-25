@@ -4,7 +4,7 @@ var sourcemaps = require('gulp-sourcemaps');
 var path = require('path');
 
 function compile() {
-    return gulp.src('./src/migrate.ts')
+    return gulp.src('./src/**/*.ts')
         .pipe(sourcemaps.init())
         .pipe(ts(require('../tsconfig.json').compilerOptions))
         .pipe(sourcemaps.write())

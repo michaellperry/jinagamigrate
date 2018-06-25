@@ -36,6 +36,7 @@
   },
   "dependencies": {
     "jinaga": "^2.0.0-beta.9",
-    "mongodb": "^2.2.35"
+    "mongodb": "^2.2.35",
+    "pg": "^7.4.3"
   }
 }

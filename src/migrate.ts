@@ -1,5 +1,8 @@
 import { JinagaServer } from 'jinaga';
-import { Collection, MongoClient } from 'mongodb';
+import { Collection, Db, MongoClient } from 'mongodb';
+import { PoolClient } from 'pg';
+
+import { ConnectionFactory } from './connection';
 
 const args = process.argv.slice(2);
 
@@ -23,11 +26,7 @@ MongoClient.connect(mongoDbConnection, (error, db) => {
 
     console.log('Connected to MongoDB.');
 
-    const users = db.collection('users');
-    const successors = db.collection('successors');
-    migrateUsers(users).then(() => {
-        return migrateFacts(successors);
-    }).then(() => {
+    migrate(db).then(() => {
         db.close();
         console.log('Disconnected from MongoDB.');
     }).catch(err => {
@@ -37,38 +36,46 @@ MongoClient.connect(mongoDbConnection, (error, db) => {
 
 console.log('Migrate from ' + mongoDbConnection + ' to ' + postgreSQLConnection + '.');
 
-async function migrateUsers(users: Collection<any>): Promise<void> {
-    const query = {
-        provider: 'https://sts.windows.net/f2267c2e-5a54-49f4-84fa-e4f2f4038a2e/'
-    };
-    await find(users, query, user => {
-        console.log('Found user ' + user.userId);
+async function migrate(db: Db): Promise<void> {
+    const users = db.collection('users');
+    const successors = db.collection('successors');
+    const connectionFactory = new ConnectionFactory(postgreSQLConnection);
+    await migrateUsers(users, connectionFactory);
+    await migrateFacts(successors, connectionFactory);
+}
+
+async function migrateUsers(users: Collection<any>, connectionFactory: ConnectionFactory): Promise<void> {
+    await connectionFactory.with(async connection => {
+        const query = {
+            provider: 'https://sts.windows.net/f2267c2e-5a54-49f4-84fa-e4f2f4038a2e/'
+        };
+        await find(users, query, async user => {
+            console.log('Found user ' + user.userId);
+            await saveUser(connection, user);
+        });
     });
 }
 
-async function migrateFacts(successors: Collection<any>): Promise<void> {
+async function migrateFacts(successors: Collection<any>, connectionFactory: ConnectionFactory): Promise<void> {
     const query = {
         fact: {
             '$exists': true
         }
     };
-    await find(successors, query, successor => {
-        console.log('Found fact ' + JSON.stringify(successor.fact));
+    await find(successors, query, async successor => {
+        //console.log('Found fact ' + JSON.stringify(successor.fact));
     });
 }
 
-function find(collection: Collection<any>, query: {}, handler: ((result: any) => void)): Promise<void> {
-    return new Promise<void>((resolve, reject) => {
-        const cursor = collection.find(query);
-        cursor.forEach(result => {
-            handler(result);
-        }, error => {
-            if (error) {
-                reject(error.message);
-            }
-            else {
-                resolve();
-            }
-        });
-    })
+async function find(collection: Collection<any>, query: {}, handler: ((result: any) => Promise<void>)): Promise<void> {
+    const cursor = collection.find(query);
+    while (await cursor.hasNext()) {
+        const result = await cursor.next();
+        await handler(result);
+    }
+}
+
+async function saveUser(connection: PoolClient, user: any) {
+    await connection.query('INSERT INTO public.user (provider, user_id, private_key, public_key) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING',
+        [user.provider, user.userId, user.privateKey, user.publicKey]);
 }
